@@ -1,0 +1,78 @@
+// Measures for the procurement execution report.
+// Fact table: tb_UnitA (materialised from vw_UnitA). Names anonymised.
+// AwardFlag = 1 → awarded; otherwise still in progress.
+
+// ── Quantities ─────────────────────────────────────────────────────────────
+Qty Awarded =
+CALCULATE ( SUM ( tb_UnitA[QtyInProcess] ), tb_UnitA[AwardFlag] = 1 ) + 0
+
+Qty In Progress =
+CALCULATE ( SUM ( tb_UnitA[QtyInProcess] ), tb_UnitA[AwardFlag] <> 1 ) + 0
+
+// Debug helper while validating the model: should always return 0.
+Qty Check =
+[Qty Awarded] + [Qty In Progress] - SUM ( tb_UnitA[QtyInProcess] )
+
+// ── Execution % (by quantity) ──────────────────────────────────────────────
+// Current snapshot: share of everything open right now that is already awarded.
+// Description shown to users: "Share of the volume currently in process that
+// has been awarded. It can drop when new processes open."
+% Execution (Current) =
+DIVIDE ( [Qty Awarded], [Qty Awarded] + [Qty In Progress], 0 )
+
+% Still Open =
+DIVIDE ( [Qty In Progress], [Qty Awarded] + [Qty In Progress], 0 )
+
+// ── Execution % (by number of processes) ───────────────────────────────────
+// A single large process in progress shouldn't outweigh nine closed ones.
+Processes Awarded =
+CALCULATE ( DISTINCTCOUNT ( tb_UnitA[ProcessId] ), tb_UnitA[AwardFlag] = 1 )
+
+Processes In Progress =
+CALCULATE ( DISTINCTCOUNT ( tb_UnitA[ProcessId] ), tb_UnitA[AwardFlag] <> 1 )
+
+% Processes Awarded =
+DIVIDE ( [Processes Awarded], [Processes Awarded] + [Processes In Progress], 0 )
+
+// ── Values ─────────────────────────────────────────────────────────────────
+Awarded Value =
+SUM ( tb_UnitA[AwardedValue] )
+
+Savings =
+SUM ( tb_UnitA[BaseValue] ) - [Awarded Value]
+
+// Average awarded value per year. Iterates the fact table, not the measures
+// table: a measures table has no rows, so AVERAGEX over it returns blank.
+Avg Awarded Value =
+AVERAGEX ( tb_UnitA, [Awarded Value] )
+
+// Same average, ignoring entity and item filters (always the overall figure).
+Avg Awarded Value (Overall) =
+CALCULATE (
+    AVERAGEX ( tb_UnitA, [Awarded Value] ),
+    REMOVEFILTERS ( tb_UnitA[Entity] ),
+    REMOVEFILTERS ( tb_UnitA[ItemCode] )
+)
+
+// ── Year over year with an integer Year column ─────────────────────────────
+// SAMEPERIODLASTYEAR needs a date column; here Year is an integer.
+Awarded Value PY =
+CALCULATE (
+    [Awarded Value],
+    FILTER ( ALL ( tb_UnitA[Year] ), tb_UnitA[Year] = MAX ( tb_UnitA[Year] ) - 1 )
+)
+
+YoY % =
+DIVIDE ( [Awarded Value] - [Awarded Value PY], [Awarded Value PY] )
+
+// ── KPI card text (value + variation in one field) ─────────────────────────
+// For a standard card visual, which accepts one field.
+KPI Awarded Value =
+VAR vCurrent = [Awarded Value]
+VAR vPrevious = [Awarded Value PY]
+VAR vVar = DIVIDE ( vCurrent - vPrevious, vPrevious )
+VAR vArrow = IF ( vVar >= 0, "▲ +", "▼ " )
+RETURN
+    FORMAT ( vCurrent / 1e6, "0.0" ) & " M€"
+        & UNICHAR ( 10 )
+        & IF ( ISBLANK ( vVar ), "no previous year", vArrow & FORMAT ( ABS ( vVar ), "0.0%" ) & " vs previous year" )
